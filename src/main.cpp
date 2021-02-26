@@ -1,7 +1,9 @@
 #include <Arduino.h>
-#include <U8x8lib.h>
 #include <SPI.h>
 #include <AD9833.h>
+#include <display.h>
+#include <SimpleKalmanFilter.h>
+#include <math.h>
 
 // Pins that we need to keep track of
 #define FSYNC 10
@@ -14,26 +16,15 @@
 AD9833 ad9833(FSYNC);
 WaveformType wf = SINE_WAVE;
 uint8_t source = KNOB;
-
-U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
-
-uint8_t sineTile[8] = {12, 2, 2, 12, 48, 64, 64, 48};
-uint8_t squareTile[8] = {64, 126, 2, 2, 2, 126, 64, 64};
-uint8_t triangleTile[8] = {96, 24, 6, 24, 96, 24, 6, 24};
+bool vPerOct = false;
 
 // filtering for potentiometer
-float EMA_a = 0.5;
-int EMA_S = 0;
+SimpleKalmanFilter filter(2, 2, 0.01);
+//float EMA_a = 0.8;
+//int EMA_S = 0;
 
 // so we don't spam the module with updates
-int currentVal = 0;
-
-void drawWaveform(uint8_t waveForm[])
-{
-  u8x8.drawTile(13, 4, 1, waveForm);
-  u8x8.drawTile(14, 4, 1, waveForm);
-  u8x8.drawTile(15, 4, 1, waveForm);
-}
+float currentVal = 0;
 
 // Cycle through the waveform options
 void changeWaveform()
@@ -76,20 +67,39 @@ void changeSource()
   }
 }
 
+void changeRange()
+{
+  vPerOct = !vPerOct;
+  delay(50);
+  while (digitalRead(RANGE) == LOW)
+  {
+  }
+}
+
+float calculateFrequency(int potVal, int cvVal)
+{
+  // handle the filtering of inputs
+  float filtered = filter.updateEstimate(potVal); // need to do CV soon
+
+  if (vPerOct)
+  {
+    // do a volt-per-octave thing
+    return (pow(2, filtered / 204.6) * 65.40639133);
+  }
+  else
+  {
+    // do a normal LFO thing
+    return map(filtered, 0, 1023, 1, 100);
+  }
+}
+
 void setup()
 {
   ad9833.Begin(); // apparently HAS to be the first command
 
-  u8x8.begin();
-  u8x8.setFont(u8x8_font_inb33_3x6_n);
-  //u8x8.drawString(0, 1, "1.03");
-  u8x8.setCursor(0, 1);
-  u8x8.print(3.14);
+  setupDisplay();
 
-  u8x8.setFont(u8x8_font_pressstart2p_r);
-  u8x8.drawString(13, 2, "Hz");
-  drawWaveform(sineTile);
-  EMA_S = analogRead(source);
+  filter.updateEstimate(analogRead(source));
 
   ad9833.ApplySignal(wf, REG0, 440);
   ad9833.EnableOutput(true);
@@ -101,9 +111,15 @@ void setup()
 
 void loop()
 {
-  int potVal = analogRead(source);
-  EMA_S = (EMA_a * potVal) + ((1 - EMA_a) * EMA_S);
-  byte mappedVal = map(potVal, 0, 1021, 100, 1); // because I wired the pot up the wrong way round :|
+  // get input
+  int potVal = 1023 - analogRead(KNOB); // because I wired the pot up the wrong way round :|
+  int cvVal = analogRead(CV);
+  bool modePressed = digitalRead(MODE) == LOW;
+  bool shapePressed = digitalRead(SHAPE) == LOW;
+  bool rangePressed = digitalRead(RANGE) == LOW;
+
+  // process input
+  float mappedVal = calculateFrequency(potVal, cvVal);
 
   if (mappedVal != currentVal)
   {
@@ -111,47 +127,30 @@ void loop()
     // this should be a float
     ad9833.ApplySignal(wf, REG0, currentVal);
 
-    u8x8.setCursor(0, 1);
-    u8x8.setFont(u8x8_font_inb33_3x6_n);
-
-    if (mappedVal < 10)
-    {
-      u8x8.print("   ");
-    }
-    else if (mappedVal < 100)
-    {
-      u8x8.print("  ");
-    }
-    else if (mappedVal < 1000)
-    {
-      u8x8.print(" ");
-    }
-
-    u8x8.print(mappedVal);
+    displayFrequencyNumber(currentVal);
   }
 
-  u8x8.setFont(u8x8_font_pressstart2p_r);
   char buttons[] = "   ";
 
-  if (digitalRead(MODE) == LOW)
+  if (modePressed)
   {
     buttons[0] = 'M';
-    changeSource();
+    //  changeSource();
   }
 
-  if (digitalRead(SHAPE) == LOW)
+  if (shapePressed)
   {
     buttons[1] = 'S';
     changeWaveform();
     ad9833.ApplySignal(wf, REG0, currentVal);
   }
 
-  if (digitalRead(RANGE) == LOW)
+  if (rangePressed)
   {
     buttons[2] = 'R';
+    changeRange();
   }
 
-  u8x8.drawString(13, 0, buttons);
-
+  displayButtonStates(buttons);
   delay(5);
 }
