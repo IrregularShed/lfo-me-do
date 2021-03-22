@@ -1,5 +1,5 @@
-#ifndef __twat__
-#define __twat__
+#ifndef __oledDisplay__
+#define __oledDisplay__
 
 #include <U8x8lib.h>
 
@@ -11,8 +11,8 @@ void drawWaveform(uint8_t waveForm[]);
 
 void setupDisplay();
 
-void displayFrequencyNumber(float freq);
-
-void displayButtonStates(char buttons[]);
-
+void displayFrequencyNumber(float freq, float precision);
+void blankFrequency();
+void displayCVmode(bool active);
+void displayRange(char str[]);
 #endif
